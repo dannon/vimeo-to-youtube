@@ -1,0 +1,12 @@
+config.py
+client_secrets.json
+token.pickle
+migration_state.json
+migration_state.json.tmp
+__pycache__/
+*.pyc
+/tmp/
+downloads/
+vimeo_metadata.json
+venv/
+.claude/
