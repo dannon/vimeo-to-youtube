@@ -459,6 +459,123 @@ def show_status():
         print(f"  Last run:    {state['last_run']}")
 
 
+def add_to_playlist(youtube, playlist_id):
+    """Add all completed videos to a YouTube playlist, skipping those already in it."""
+    state = load_state()
+
+    # Get videos already in the playlist
+    existing = set()
+    next_page = None
+    while True:
+        resp = youtube.playlistItems().list(
+            part="snippet", playlistId=playlist_id, maxResults=50, pageToken=next_page
+        ).execute()
+        for item in resp["items"]:
+            existing.add(item["snippet"]["resourceId"]["videoId"])
+        next_page = resp.get("nextPageToken")
+        if not next_page:
+            break
+
+    to_add = [
+        (uri, v) for uri, v in state["videos"].items()
+        if v.get("status") == "completed" and v.get("youtube_id")
+        and v["youtube_id"] not in existing
+    ]
+
+    if not to_add:
+        print("All completed videos are already in the playlist")
+        return
+
+    print(f"{len(to_add)} videos to add to playlist...")
+    for i, (uri, v) in enumerate(to_add, 1):
+        try:
+            youtube.playlistItems().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {
+                            "kind": "youtube#video",
+                            "videoId": v["youtube_id"],
+                        },
+                    },
+                },
+            ).execute()
+            print(f"  {i}/{len(to_add)}: {v.get('title', uri)}")
+        except HttpError as e:
+            if "quotaExceeded" in str(e):
+                print(f"\nQuota exceeded after {i-1}/{len(to_add)}. Resume tomorrow.")
+                return
+            print(f"  {i}/{len(to_add)} FAILED: {v.get('title', uri)}: {e}")
+        time.sleep(0.5)
+    print("Done!")
+
+
+def set_recording_dates(youtube):
+    """Set recording date and update description with original Vimeo publish date."""
+    state = load_state()
+
+    if not os.path.exists(METADATA_FILE):
+        print(f"Missing {METADATA_FILE} — run --download-only first")
+        return
+
+    with open(METADATA_FILE) as f:
+        vimeo_meta = {v["uri"]: v for v in json.load(f)}
+
+    completed = [
+        (uri, v) for uri, v in state["videos"].items()
+        if v.get("status") == "completed" and v.get("youtube_id")
+    ]
+
+    print(f"Updating {len(completed)} videos with recording dates...")
+    for i, (uri, v) in enumerate(completed, 1):
+        meta = vimeo_meta.get(uri)
+        if not meta or not meta.get("created_time"):
+            print(f"  {i}/{len(completed)}: SKIP {v.get('title')} (no date)")
+            continue
+
+        date_str = meta["created_time"][:10]
+
+        try:
+            resp = youtube.videos().list(
+                part="snippet,recordingDetails", id=v["youtube_id"],
+            ).execute()
+
+            if not resp["items"]:
+                print(f"  {i}/{len(completed)}: NOT FOUND {v.get('title')}")
+                continue
+
+            item = resp["items"][0]
+            snippet = item["snippet"]
+            desc = snippet.get("description", "")
+
+            if "Originally published on Vimeo:" in desc and f"({date_str})" not in desc:
+                desc = desc.replace(
+                    "Originally published on Vimeo:",
+                    f"Originally published on Vimeo ({date_str}):",
+                )
+                snippet["description"] = desc[:5000]
+
+            youtube.videos().update(
+                part="snippet,recordingDetails",
+                body={
+                    "id": v["youtube_id"],
+                    "snippet": snippet,
+                    "recordingDetails": {"recordingDate": date_str},
+                },
+            ).execute()
+            print(f"  {i}/{len(completed)}: {v.get('title', uri)[:60]} -> {date_str}")
+
+        except HttpError as e:
+            if "quotaExceeded" in str(e):
+                print(f"\nQuota exceeded after {i-1}/{len(completed)}. Resume tomorrow.")
+                return
+            print(f"  {i}/{len(completed)} FAILED: {v.get('title')}: {e}")
+
+        time.sleep(0.5)
+    print("Done!")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Migrate videos from Vimeo to YouTube")
     parser.add_argument("--list", action="store_true", help="List all Vimeo videos with migration status")
@@ -467,6 +584,8 @@ def main():
     parser.add_argument("--retry-failed", action="store_true", help="Only retry previously failed videos")
     parser.add_argument("--download-only", action="store_true", help="Download all videos and metadata locally (no YouTube)")
     parser.add_argument("--status", action="store_true", help="Show migration progress summary")
+    parser.add_argument("--add-to-playlist", metavar="PLAYLIST_ID", help="Add completed videos to a YouTube playlist")
+    parser.add_argument("--set-dates", action="store_true", help="Set recording dates from original Vimeo publish dates")
     args = parser.parse_args()
 
     if args.status:
@@ -487,6 +606,16 @@ def main():
         youtube = get_youtube_service()
         state = load_state()
         publish_videos(youtube, state)
+        return
+
+    if args.add_to_playlist:
+        youtube = get_youtube_service()
+        add_to_playlist(youtube, args.add_to_playlist)
+        return
+
+    if args.set_dates:
+        youtube = get_youtube_service()
+        set_recording_dates(youtube)
         return
 
     # Default: run migration

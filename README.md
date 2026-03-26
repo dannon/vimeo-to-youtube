@@ -59,6 +59,12 @@ python migrate.py --retry-failed
 
 # Flip all completed videos from unlisted to public
 python migrate.py --publish
+
+# Add completed videos to a YouTube playlist
+python migrate.py --add-to-playlist PLAYLIST_ID
+
+# Set recording dates from original Vimeo publish dates
+python migrate.py --set-dates
 ```
 
 ## Quota
