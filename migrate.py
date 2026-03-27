@@ -548,8 +548,17 @@ def set_recording_dates(youtube):
             item = resp["items"][0]
             snippet = item["snippet"]
             desc = snippet.get("description", "")
+            existing_date = (item.get("recordingDetails") or {}).get("recordingDate", "")
 
-            if "Originally published on Vimeo:" in desc and f"({date_str})" not in desc:
+            # Skip if already set correctly
+            needs_desc = "Originally published on Vimeo:" in desc and f"({date_str})" not in desc
+            needs_date = not existing_date.startswith(date_str)
+
+            if not needs_desc and not needs_date:
+                print(f"  {i}/{len(completed)}: SKIP {v.get('title', uri)[:60]} (already set)")
+                continue
+
+            if needs_desc:
                 desc = desc.replace(
                     "Originally published on Vimeo:",
                     f"Originally published on Vimeo ({date_str}):",
